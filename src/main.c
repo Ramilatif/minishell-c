@@ -2,6 +2,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+enum exit_code
+{
+    EXIT_CMD_NOT_EXECUTABLE = 126,
+    EXIT_CMD_NOT_FOUND      = 127,
+};
 
 /**
  * @brief Minimal interactive shell entry point.
@@ -40,9 +48,6 @@ int main(void)
             break;
         }
 
-        /* Echo the input line for the current minimal shell behavior. */
-        printf("%s", line);
-
         /* Split the input into tokens separated by spaces, tabs, and newlines. */
         char *saveptr;
         char *token = strtok_r(line, " \t\n", &saveptr);
@@ -72,6 +77,38 @@ int main(void)
 
         /* Terminate the token list with NULL for compatibility with exec-style APIs. */
         argv[i] = NULL;
+
+        if (argv[0] == NULL)
+        {
+            continue; /* No command entered, prompt again. */
+        }
+
+        /* Flush pending output so the child does not inherit a copy of it. */
+        fflush(stdout);
+
+        pid_t pid = fork();
+        if (pid == -1)
+        {
+            perror("fork");
+            free(argv);
+            free(line);
+            return (1);
+        }
+
+        if (pid == 0)
+        {
+            /* Child process: execute the command. */
+            execvp(argv[0], argv);
+            perror(argv[0]); /* If execvp returns, an error occurred. */
+            _exit(EXIT_CMD_NOT_FOUND);
+        }
+        else
+        {
+            /* Parent process: wait for the child to finish. */
+            int status;
+            waitpid(pid, &status, 0);
+        }
+
     }
 
     free(argv);
