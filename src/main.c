@@ -1,23 +1,17 @@
-#define _POSIX_C_SOURCE 200809L
+#include "builtins.h"
+#include "exec.h"
+#include "parser.h"
+
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-enum exit_code
-{
-    EXIT_CMD_NOT_EXECUTABLE = 126,
-    EXIT_CMD_NOT_FOUND      = 127,
-};
 
 /**
  * @brief Minimal interactive shell entry point.
  *
  * This program reads a line from stdin, splits it into arguments,
- * and stores them in an argv-like array until the user exits.
+ * and runs it as a builtin or an external command until the user exits.
  *
- * @return 0 on clean exit, 1 on allocation failure.
+ * @return 0 on clean exit, 1 on allocation or fork failure.
  */
 int main(void)
 {
@@ -48,67 +42,34 @@ int main(void)
             break;
         }
 
-        /* Split the input into tokens separated by spaces, tabs, and newlines. */
-        char *saveptr;
-        char *token = strtok_r(line, " \t\n", &saveptr);
-        int i = 0;
-
-        while (token != NULL)
+        if (parse_line(line, &argv, &size) == -1)
         {
-            /* Resize the array when more arguments are needed. */
-            if (i + 1 >= size)
-            {
-                size *= 2;
-                char **new_argv = realloc(argv, size * sizeof(char *));
-                if (new_argv == NULL)
-                {
-                    perror("realloc");
-                    free(argv);
-                    free(line);
-                    return (1);
-                }
-                argv = new_argv;
-            }
-
-            argv[i] = token;
-            i++;
-            token = strtok_r(NULL, " \t\n", &saveptr);
+            free(argv);
+            free(line);
+            return (1);
         }
-
-        /* Terminate the token list with NULL for compatibility with exec-style APIs. */
-        argv[i] = NULL;
 
         if (argv[0] == NULL)
         {
             continue; /* No command entered, prompt again. */
         }
 
-        /* Flush pending output so the child does not inherit a copy of it. */
-        fflush(stdout);
-
-        pid_t pid = fork();
-        if (pid == -1)
+        enum builtin_status status = run_builtin(argv);
+        if (status == BUILTIN_EXIT)
         {
-            perror("fork");
+            break; /* Exit the shell loop. */
+        }
+        if (status == BUILTIN_DONE)
+        {
+            continue; /* Prompt again after the builtin. */
+        }
+
+        if (exec_command(argv) == -1)
+        {
             free(argv);
             free(line);
             return (1);
         }
-
-        if (pid == 0)
-        {
-            /* Child process: execute the command. */
-            execvp(argv[0], argv);
-            perror(argv[0]); /* If execvp returns, an error occurred. */
-            _exit(EXIT_CMD_NOT_FOUND);
-        }
-        else
-        {
-            /* Parent process: wait for the child to finish. */
-            int status;
-            waitpid(pid, &status, 0);
-        }
-
     }
 
     free(argv);
